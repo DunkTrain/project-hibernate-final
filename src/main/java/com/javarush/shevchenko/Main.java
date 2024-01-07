@@ -4,29 +4,35 @@ import java.util.Set;
 import java.util.List;
 import java.util.ArrayList;
 import java.util.Properties;
-import com.javarush.shevchenko.domain.City;
-import com.javarush.shevchenko.domain.Country;
-import com.javarush.shevchenko.dao.CityDAO;
-import com.javarush.shevchenko.dao.CountryDAO;
-import com.javarush.shevchenko.domain.CountryLanguage;
+import java.util.Properties;
+
+import com.javarush.shevchenko.redis.CityCountry;
+import com.javarush.shevchenko.redis.Language;
 import org.hibernate.Session;
 import io.lettuce.core.RedisURI;
-import java.util.stream.Collectors;
 import io.lettuce.core.RedisClient;
+
+import java.util.stream.Collectors;
+
 import org.hibernate.SessionFactory;
 import org.hibernate.cfg.Environment;
 import org.hibernate.cfg.Configuration;
+
 import static java.util.Objects.nonNull;
+
+import com.javarush.shevchenko.dao.CityDAO;
+import com.javarush.shevchenko.domain.City;
+import com.javarush.shevchenko.domain.Country;
+import com.javarush.shevchenko.dao.CountryDAO;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import io.lettuce.core.api.StatefulRedisConnection;
 import io.lettuce.core.api.sync.RedisStringCommands;
+import com.javarush.shevchenko.domain.CountryLanguage;
 import com.fasterxml.jackson.core.JsonProcessingException;
-import java.util.Properties;
-//TODO: Написать метод трансформации данных
 
 public class Main {
     private final SessionFactory sessionFactory;
- //   private final RedisClient redisClient;
+    private final RedisClient redisClient;
 
     private final ObjectMapper mapper;
 
@@ -38,12 +44,34 @@ public class Main {
         cityDAO = new CityDAO(sessionFactory);
         countryDAO = new CountryDAO(sessionFactory);
 
- //       redisClient = prepareRedisClient();
+        redisClient = prepareRedisClient();
         mapper = new ObjectMapper();
     }
+
     public static void main(String[] args) {
         Main main = new Main();
         List<City> allCities = main.fetchData(main);
+        List<CityCountry> preparedData = main.transformData(allCities);
+        main.pushToRedis(preparedData);
+
+        //закроем текущую сессию, чтоб точно делать запрос к БД, а не вытянуть данные из кэша
+        main.sessionFactory.getCurrentSession().close();
+
+        //выбираем случайных 10 id городов
+        //так как мы не делали обработку невалидных ситуаций, используй существующие в БД id
+        List<Integer> ids = List.of(3, 2545, 123, 4, 189, 89, 3458, 1189, 10, 102);
+
+        long startRedis = System.currentTimeMillis();
+        main.testRedisData(ids);
+        long stopRedis = System.currentTimeMillis();
+
+        long startMysql = System.currentTimeMillis();
+        main.testMysqlData(ids);
+        long stopMysql = System.currentTimeMillis();
+
+        System.out.printf("%s:\t%d ms\n", "Redis", (stopRedis - startRedis));
+        System.out.printf("%s:\t%d ms\n", "MySQL", (stopMysql - startMysql));
+
         main.shutdown();
     }
 
@@ -68,13 +96,13 @@ public class Main {
         return sessionFactory;
     }
 
-/*    private RedisClient prepareRedisClient() {
+    private RedisClient prepareRedisClient() {
         RedisClient redisClient = RedisClient.create(RedisURI.create("localhost", 6379));
         try (StatefulRedisConnection<String, String> connection = redisClient.connect()) {
             System.out.println("\nConnected to Redis\n");
         }
         return redisClient;
-    }*/
+    }
 
     private List<City> fetchData(Main main) {
         try (Session session = main.sessionFactory.getCurrentSession()) {
@@ -91,12 +119,77 @@ public class Main {
         }
     }
 
+    private List<CityCountry> transformData(List<City> cities) {
+        return cities.stream().map(city -> {
+            CityCountry res = new CityCountry();
+            res.setId(city.getId());
+            res.setName(city.getName());
+            res.setPopulation(city.getPopulation());
+            res.setDistrict(city.getDistrict());
+
+            Country country = city.getCountry();
+            res.setAlternativeCountryCode(country.getAlternativeCode());
+            res.setContinent(country.getContinent());
+            res.setCountryCode(country.getCode());
+            res.setCountryName(country.getName());
+            res.setCountryPopulation(country.getPopulation());
+            res.setCountryRegion(country.getRegion());
+            res.setCountrySurfaceArea(country.getSurfaceArea());
+            Set<CountryLanguage> countryLanguages = country.getLanguages();
+            Set<Language> languages = countryLanguages.stream().map(cl -> {
+                Language language = new Language();
+                language.setLanguage(cl.getLanguage());
+                language.setOfficial(cl.getOfficial());
+                language.setPercentage(cl.getPercentage());
+                return language;
+            }).collect(Collectors.toSet());
+            res.setLanguages(languages);
+
+            return res;
+        }).collect(Collectors.toList());
+    }
+
+    private void pushToRedis(List<CityCountry> data) {
+        try (StatefulRedisConnection<String, String> connection = redisClient.connect()) {
+            RedisStringCommands<String, String> sync = connection.sync();
+            for (CityCountry cityCountry : data) {
+                try {
+                    sync.set(String.valueOf(cityCountry.getId()), mapper.writeValueAsString(cityCountry));
+                } catch (JsonProcessingException e) {
+                    e.printStackTrace();
+                }
+            }
+        }
+    }
+
+    private void testRedisData(List<Integer> ids) {
+        try (Session session = sessionFactory.getCurrentSession()) {
+            session.beginTransaction();
+            for (Integer id : ids) {
+                City city = cityDAO.getById(id);
+                Set<CountryLanguage> languages = city.getCountry().getLanguages();
+            }
+            session.getTransaction().commit();
+        }
+    }
+
+    private void testMysqlData(List<Integer> ids) {
+        try (Session session = sessionFactory.getCurrentSession()) {
+            session.beginTransaction();
+            for (Integer id : ids) {
+                City city = cityDAO.getById(id);
+                Set<CountryLanguage> languages = city.getCountry().getLanguages();
+            }
+            session.getTransaction().commit();
+        }
+    }
+
     private void shutdown() {
         if (nonNull(sessionFactory)) {
             sessionFactory.close();
         }
-/*        if (nonNull(redisClient)) {
+        if (nonNull(redisClient)) {
             redisClient.shutdown();
-        }*/
+        }
     }
 }
