@@ -4,26 +4,20 @@ import java.util.Set;
 import java.util.List;
 import java.util.ArrayList;
 import java.util.Properties;
-import java.util.Properties;
-
-import com.javarush.shevchenko.redis.CityCountry;
-import com.javarush.shevchenko.redis.Language;
 import org.hibernate.Session;
 import io.lettuce.core.RedisURI;
 import io.lettuce.core.RedisClient;
-
 import java.util.stream.Collectors;
-
 import org.hibernate.SessionFactory;
 import org.hibernate.cfg.Environment;
 import org.hibernate.cfg.Configuration;
-
 import static java.util.Objects.nonNull;
-
 import com.javarush.shevchenko.dao.CityDAO;
 import com.javarush.shevchenko.domain.City;
+import com.javarush.shevchenko.redis.Language;
 import com.javarush.shevchenko.domain.Country;
 import com.javarush.shevchenko.dao.CountryDAO;
+import com.javarush.shevchenko.redis.CityCountry;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import io.lettuce.core.api.StatefulRedisConnection;
 import io.lettuce.core.api.sync.RedisStringCommands;
